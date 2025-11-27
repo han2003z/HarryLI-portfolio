@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gradient Descent Runner - Harry Li</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <style>
+        :root {
+            --bg-color: #0f1724;
+            --text-color: #f8fafc;
+            --accent-color: #38bdf8;
+            --danger-color: #ef4444;
+            --safe-color: #22c55e;
+        }
+        body { font-family: 'Inter', sans-serif; background: var(--bg-color); color: var(--text-color); margin: 0; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; }
+        .game-wrapper { position: relative; width: 100%; max-width: 600px; height: 100%; max-height: 800px; display: flex; flex-direction: column; }
+        canvas { background: linear-gradient(to bottom, #1e293b, #0f1724); flex: 1; width: 100%; }
+        
+        .hud { position: absolute; top: 20px; left: 20px; right: 20px; display: flex; justify-content: space-between; font-family: monospace; font-size: 1.2rem; text-shadow: 1px 1px 2px black; pointer-events: none; }
+        .hud-loss { color: var(--danger-color); }
+        .hud-epoch { color: var(--accent-color); }
+
+        .btn-back { position: absolute; top: 1rem; left: 1rem; z-index: 100; color: rgba(255,255,255,0.5); font-size: 1.5rem; text-decoration: none; }
+        .btn-back:hover { color: white; }
+
+        .start-screen, .game-over-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85);
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            text-align: center; z-index: 50;
+        }
+        .hidden { display: none !important; }
+        
+        h1 { font-size: 2.5rem; margin-bottom: 0.5rem; background: linear-gradient(to right, var(--accent-color), #818cf8); -webkit-background-clip: text; color: transparent; }
+        p { color: #94a3b8; margin-bottom: 2rem; max-width: 80%; line-height: 1.5; }
+        
+        button {
+            padding: 1rem 2.5rem; font-size: 1.2rem; border-radius: 50px; border: none;
+            background: var(--accent-color); color: #000; font-weight: bold; cursor: pointer;
+            box-shadow: 0 0 20px rgba(56, 189, 248, 0.4); transition: transform 0.2s;
+        }
+        button:hover { transform: scale(1.05); }
+
+        .mobile-controls {
+            display: none;
+            position: absolute; bottom: 20px; left: 0; width: 100%;
+            justify-content: space-between; padding: 0 40px; box-sizing: border-box;
+            pointer-events: none; /* Let clicks pass through except buttons */
+        }
+        @media (hover: none) and (pointer: coarse) {
+            .mobile-controls { display: flex; }
+        }
+        .control-btn {
+            width: 80px; height: 80px; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 50%; color: white; font-size: 2rem; display: flex; align-items: center; justify-content: center;
+            pointer-events: auto; touch-action: manipulation;
+        }
+        .control-btn:active { background: rgba(255,255,255,0.3); }
+
+    </style>
+</head>
+<body>
+
+    <div class="game-wrapper">
+        <a href="index.html" class="btn-back"><i class="ph ph-arrow-left"></i></a>
+        
+        <div class="hud">
+            <div class="hud-epoch">Epoch: <span id="scoreEpoch">0</span></div>
+            <div class="hud-loss">Loss: <span id="scoreLoss">1.000</span></div>
+        </div>
+
+        <canvas id="gameCanvas"></canvas>
+
+        <!-- Start Screen -->
+        <div class="start-screen" id="startScreen">
+            <h1>Gradient Descent</h1>
+            <p>You are the Optimizer. Ski down the Loss Landscape.<br>Avoid Local Minima (Red Pits) and find the Global Minimum.</p>
+            <button onclick="startGame()">Start Training</button>
+        </div>
+
+        <!-- Game Over Screen -->
+        <div class="game-over-screen hidden" id="gameOverScreen">
+            <h1 id="goTitle">Optimization Failed</h1>
+            <p id="goMsg">Stuck in a local minimum.</p>
+            <p>Final Loss: <span id="finalLoss" style="color:white; font-weight:bold;">0.5</span></p>
+            <button onclick="startGame()">Retrain Model</button>
+        </div>
+
+        <div class="mobile-controls">
+            <div class="control-btn" id="btnLeft"><i class="ph ph-caret-left"></i></div>
+            <div class="control-btn" id="btnRight"><i class="ph ph-caret-right"></i></div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Game State
+        let isRunning = false;
+        let player = { x: 0, y: 0, radius: 10, speed: 5 };
+        let obstacles = []; // "Local Minima" pits
+        let particles = []; // Trail
+        let epoch = 0;
+        let loss = 1.0;
+        let gameSpeed = 3;
+        let keys = { left: false, right: false };
+        let animationFrame;
+
+        // Resize
+        function resize() {
+            canvas.width = canvas.parentElement.clientWidth;
+            canvas.height = canvas.parentElement.clientHeight;
+            player.x = canvas.width / 2;
+            player.y = 100;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Inputs
+        window.addEventListener('keydown', e => {
+            if (e.key === 'ArrowLeft') keys.left = true;
+            if (e.key === 'ArrowRight') keys.right = true;
+        });
+        window.addEventListener('keyup', e => {
+            if (e.key === 'ArrowLeft') keys.left = false;
+            if (e.key === 'ArrowRight') keys.right = false;
+        });
+        
+        // Touch controls
+        const btnLeft = document.getElementById('btnLeft');
+        const btnRight = document.getElementById('btnRight');
+        
+        const handleStart = (dir) => (e) => { e.preventDefault(); keys[dir] = true; };
+        const handleEnd = (dir) => (e) => { e.preventDefault(); keys[dir] = false; };
+
+        btnLeft.addEventListener('touchstart', handleStart('left'));
+        btnLeft.addEventListener('touchend', handleEnd('left'));
+        btnRight.addEventListener('touchstart', handleStart('right'));
+        btnRight.addEventListener('touchend', handleEnd('right'));
+
+        function startGame() {
+            document.getElementById('startScreen').classList.add('hidden');
+            document.getElementById('gameOverScreen').classList.add('hidden');
+            
+            // Reset
+            epoch = 0;
+            loss = 1.0;
+            gameSpeed = 4;
+            player.x = canvas.width / 2;
+            obstacles = [];
+            particles = [];
+            isRunning = true;
+            
+            loop();
+        }
+
+        function gameOver(reason) {
+            isRunning = false;
+            cancelAnimationFrame(animationFrame);
+            
+            document.getElementById('gameOverScreen').classList.remove('hidden');
+            document.getElementById('goTitle').innerText = reason === 'win' ? 'Converged! 🚀' : 'Stuck! 📉';
+            document.getElementById('goMsg').innerText = reason === 'win' ? 'Global Minimum Reached.' : 'Caught in a Local Minimum.';
+            document.getElementById('finalLoss').innerText = loss.toFixed(4);
+        }
+
+        function loop() {
+            if (!isRunning) return;
+
+            // Clear
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Update Player
+            if (keys.left && player.x > player.radius) player.x -= player.speed;
+            if (keys.right && player.x < canvas.width - player.radius) player.x += player.speed;
+
+            // Update Game World
+            epoch++;
+            loss = Math.max(0.0001, loss * 0.999); // Loss decreases over time naturally
+            gameSpeed += 0.002; // Speed up slightly
+
+            document.getElementById('scoreEpoch').innerText = epoch;
+            document.getElementById('scoreLoss').innerText = loss.toFixed(4);
+
+            // Spawn Obstacles (Local Minima Pits)
+            if (Math.random() < 0.02) {
+                const width = 60 + Math.random() * 80;
+                obstacles.push({
+                    x: Math.random() * (canvas.width - width),
+                    y: canvas.height + 50,
+                    width: width,
+                    height: 20,
+                    type: 'pit'
+                });
+            }
+
+            // Move Obstacles
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                let obs = obstacles[i];
+                obs.y -= gameSpeed;
+
+                // Draw Obstacle (A red "pit")
+                ctx.fillStyle = 'rgba(239, 68, 68, 0.8)'; // Red
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = 'red';
+                ctx.beginPath();
+                // Draw a U shape or semi-circle representing a pit
+                ctx.arc(obs.x + obs.width/2, obs.y, obs.width/2, 0, Math.PI, false);
+                ctx.fill();
+                ctx.shadowBlur = 0;
+
+                // Collision
+                // Simple circle-rect/circle collision approximation
+                // Check if player is strictly "above" the pit horizontally and touching vertically
+                if (
+                    player.y + player.radius > obs.y && 
+                    player.y - player.radius < obs.y + obs.height &&
+                    player.x > obs.x &&
+                    player.x < obs.x + obs.width
+                ) {
+                    gameOver('lose');
+                    return;
+                }
+
+                if (obs.y < -100) obstacles.splice(i, 1);
+            }
+
+            // Draw Trail
+            particles.push({x: player.x, y: player.y, alpha: 1.0});
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                p.y -= gameSpeed;
+                p.alpha -= 0.05;
+                if (p.alpha <= 0) {
+                    particles.splice(i, 1);
+                    continue;
+                }
+                ctx.fillStyle = `rgba(56, 189, 248, ${p.alpha})`;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, player.radius * 0.6, 0, Math.PI*2);
+                ctx.fill();
+            }
+
+            // Draw Player
+            ctx.fillStyle = '#fff';
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = '#38bdf8';
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, player.radius, 0, Math.PI*2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+
+            // Draw "Global Minima" lines (Visual effect for speed)
+            ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            for(let x=0; x<canvas.width; x+=100) {
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, canvas.height);
+            }
+            ctx.stroke();
+
+            // Win condition? Maybe just endless, or win at Epoch 2000
+            if (loss < 0.01) {
+                // Let's just make it endless for high score, but technically low loss is winning
+            }
+
+            animationFrame = requestAnimationFrame(loop);
+        }
+    </script>
+</body>
+</html>
